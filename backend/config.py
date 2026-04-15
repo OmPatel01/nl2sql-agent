@@ -1,4 +1,5 @@
 # Configuration and environment variables
+# Configuration and environment variables
 from pydantic_settings import BaseSettings
 from functools import lru_cache
 from enum import Enum
@@ -26,9 +27,15 @@ class Settings(BaseSettings):
 
     # ── Gemini ───────────────────────────────────────────────
     GEMINI_API_KEY        : str = ""
-    GEMINI_MODEL          : str = "gemini-1.5-flash"
+    # Updated to the currently supported model (April 2026)
+    GEMINI_MODEL          : str = "gemini-2.5-flash"
     GEMINI_MAX_TOKENS     : int = 1024
     GEMINI_TEMPERATURE    : float = 0.0       # deterministic SQL generation
+
+    # ── Gemini Reliability ───────────────────────────────────
+    GEMINI_MAX_RETRIES       : int = 3
+    GEMINI_RETRY_BASE_DELAY  : int = 1   # seconds (exponential backoff)
+    GEMINI_FALLBACK_MODEL    : str = "gemini-2.0-flash-lite"
 
     # ── Schema cache ─────────────────────────────────────────
     SCHEMA_CACHE_TTL_SECS : int = 3600        # auto-refresh every 1 hour

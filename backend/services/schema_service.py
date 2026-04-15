@@ -13,6 +13,7 @@ from backend.models.response import SchemaResponse, SchemaTableInfo
 
 logger = logging.getLogger(__name__)
 
+_last_used_db_url: Optional[str] = None
 
 class SchemaService:
     """
@@ -30,7 +31,15 @@ class SchemaService:
     """
 
     def __init__(self, database_url: Optional[str] = None):
+        global _last_used_db_url
+
         self.database_url = database_url   # None = demo mode
+
+        # 🔥 Detect DB switch
+        if _last_used_db_url != self.database_url:
+            logger.info("Database changed — clearing schema cache.")
+            clear_cache(self.database_url)
+            _last_used_db_url = self.database_url
 
 
     async def get_prompt_text(self) -> str:

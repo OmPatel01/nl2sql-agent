@@ -1,104 +1,159 @@
-# Gemini API integration logic
+# # Gemini API integration logic
+
 import logging
 import re
+import asyncio
 from typing import Optional
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
+from google.genai.types import HttpOptions   # ← NEW: forces stable v1 endpoint
 
 from backend.config import get_settings
 
-logger   = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
 class GeminiProvider:
-    """
-    Thin async wrapper around the Gemini API.
-    Handles client initialisation, calling the model,
-    and cleaning the raw response into plain SQL.
-    """
+    """Thin async wrapper around the current Google GenAI SDK (2026)."""
 
     def __init__(self, api_key: Optional[str] = None):
-        """
-        api_key — demo mode uses GEMINI_API_KEY from settings.
-                  Custom mode passes the user's key at runtime.
-        """
         key = api_key or settings.GEMINI_API_KEY
-
         if not key:
             raise ValueError(
                 "Gemini API key is missing. "
                 "Set GEMINI_API_KEY in .env (demo) or pass it via credentials (custom)."
             )
 
-        genai.configure(api_key=key)
-
-        self.model = genai.GenerativeModel(
-            model_name=settings.GEMINI_MODEL,
-            generation_config=genai.types.GenerationConfig(
-                temperature      = settings.GEMINI_TEMPERATURE,
-                max_output_tokens= settings.GEMINI_MAX_TOKENS,
-            ),
+        # Force stable v1 API version (prevents v1beta 404s in future)
+        self.client = genai.Client(
+            api_key=key,
+            http_options=HttpOptions(api_version="v1")
         )
 
-        logger.info(f"GeminiProvider initialised with model: {settings.GEMINI_MODEL}")
+        # Updated default to current model (was the retired 1.5-flash)
+        self.model_name = settings.GEMINI_MODEL or "gemini-2.5-flash"
 
+        # Keep your original generation settings
+        self.config = types.GenerateContentConfig(
+            temperature=settings.GEMINI_TEMPERATURE,
+            max_output_tokens=settings.GEMINI_MAX_TOKENS,
+        )
+
+        logger.info(f"GeminiProvider initialised with model: {self.model_name}")
 
     async def generate(self, prompt: str) -> str:
-        """
-        Sends a prompt to Gemini and returns the raw text response.
-        Used by the classifier and any non-SQL generation tasks.
-        """
-        try:
-            response = await self.model.generate_content_async(prompt)
-            return response.text.strip()
+        """Sends a prompt to Gemini and returns the raw text response."""
+        MAX_RETRIES = settings.GEMINI_MAX_RETRIES
+        fallback_model = settings.GEMINI_FALLBACK_MODEL
+        BASE_DELAY = settings.GEMINI_RETRY_BASE_DELAY
 
-        except Exception as e:
-            logger.error(f"Gemini generate() failed: {e}")
-            raise RuntimeError(f"Gemini API error: {e}") from e
+        for attempt in range(MAX_RETRIES):
+            try:
+                response = await self.client.aio.models.generate_content(
+                    model=self.model_name,
+                    contents=prompt,
+                    config=self.config,
+                )
+                return response.text.strip()
 
+            except Exception as e:
+                error_str = str(e)
+
+                # 🔁 Retry on overload (503)
+                if "503" in error_str and attempt < MAX_RETRIES - 1:
+                    wait_time = BASE_DELAY * (2 ** attempt)
+                    logger.warning(
+                        f"Gemini overloaded (attempt {attempt+1}) — retrying in {wait_time}s..."
+                    )
+                    await asyncio.sleep(wait_time)
+                    continue
+
+                # 🔥 Fallback model if retries exhausted
+                if "503" in error_str:
+                    logger.warning("Switching to fallback model due to repeated failures...")
+                    try:
+                        response = await self.client.aio.models.generate_content(
+                            model=fallback_model,
+                            contents=prompt,
+                            config=self.config,
+                        )
+                        return response.text.strip()
+                    except Exception as fallback_error:
+                        logger.error(f"Fallback model also failed: {fallback_error}")
+                        raise RuntimeError(f"Gemini API error: {fallback_error}") from fallback_error
+
+                logger.error(f"Gemini generate() failed: {e}")
+                raise RuntimeError(f"Gemini API error: {e}") from e
 
     async def generate_sql(self, prompt: str) -> str:
-        """
-        Sends a prompt to Gemini and returns cleaned SQL only.
-        Strips markdown fences, extra whitespace, and commentary
-        that the model sometimes wraps around the SQL.
-        """
-        try:
-            response = await self.model.generate_content_async(prompt)
-            raw      = response.text.strip()
-            sql      = self._clean_sql(raw)
+        """Sends a prompt to Gemini and returns cleaned SQL only."""
+        MAX_RETRIES = settings.GEMINI_MAX_RETRIES
+        fallback_model = settings.GEMINI_FALLBACK_MODEL
+        BASE_DELAY = settings.GEMINI_RETRY_BASE_DELAY
 
-            logger.debug(f"Gemini raw output:\n{raw}")
-            logger.debug(f"Cleaned SQL:\n{sql}")
+        for attempt in range(MAX_RETRIES):
+            try:
+                response = await self.client.aio.models.generate_content(
+                    model=self.model_name,
+                    contents=prompt,
+                    config=self.config,
+                )
 
-            return sql
+                raw = response.text.strip()
+                sql = self._clean_sql(raw)
 
-        except Exception as e:
-            logger.error(f"Gemini generate_sql() failed: {e}")
-            raise RuntimeError(f"Gemini API error: {e}") from e
+                logger.debug(f"Gemini raw output:\n{raw}")
+                logger.debug(f"Cleaned SQL:\n{sql}")
 
+                return sql
+
+            except Exception as e:
+                error_str = str(e)
+
+                # 🔁 Retry on overload
+                if "503" in error_str and attempt < MAX_RETRIES - 1:
+                    wait_time = BASE_DELAY * (2 ** attempt)
+                    logger.warning(
+                        f"Gemini overloaded (attempt {attempt+1}) — retrying in {wait_time}s..."
+                    )
+                    await asyncio.sleep(wait_time)
+                    continue
+
+                # 🔥 Fallback model
+                if "503" in error_str:
+                    logger.warning("Switching to fallback model due to repeated failures...")
+                    try:
+                        response = await self.client.aio.models.generate_content(
+                            model=fallback_model,
+                            contents=prompt,
+                            config=self.config,
+                        )
+
+                        raw = response.text.strip()
+                        sql = self._clean_sql(raw)
+                        return sql
+
+                    except Exception as fallback_error:
+                        logger.error(f"Fallback model also failed: {fallback_error}")
+                        raise RuntimeError(f"Gemini API error: {fallback_error}") from fallback_error
+
+                logger.error(f"Gemini generate_sql() failed: {e}")
+                raise RuntimeError(f"Gemini API error: {e}") from e
 
     # ── Private ───────────────────────────────────────────────
-
     @staticmethod
     def _clean_sql(raw: str) -> str:
-        """
-        Cleans Gemini's response down to plain SQL.
-
-        Handles these common model behaviours:
-          1. SQL wrapped in ```sql ... ``` fences
-          2. SQL wrapped in plain ``` ... ``` fences
-          3. Prefixes like "Here is the SQL:" before the query
-          4. Trailing commentary after the semicolon
-          5. Excess whitespace / newlines
-        """
-        # 1. Strip markdown code fences (```sql or ```)
-        fenced = re.search(r"```(?:sql)?\s*(.*?)```", raw, re.DOTALL | re.IGNORECASE)
+        """Cleans Gemini's response down to plain SQL (unchanged)."""
+        # 1. Strip markdown code fences
+        fenced = re.search(
+            r"```(?:sql)?\s*(.*?)```", raw, re.DOTALL | re.IGNORECASE
+        )
         if fenced:
             return fenced.group(1).strip()
 
-        # 2. Remove common prose prefixes the model adds
+        # 2. Remove common prose prefixes
         prose_prefixes = [
             r"^here is the sql[:\s]+",
             r"^here's the sql[:\s]+",
@@ -110,8 +165,7 @@ class GeminiProvider:
         for pattern in prose_prefixes:
             cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE).strip()
 
-        # 3. If multiple statements somehow sneak through, keep only the first
-        #    (split on ; but preserve the semicolon)
+        # 3. Keep only the first statement
         statements = [s.strip() for s in cleaned.split(";") if s.strip()]
         if statements:
             cleaned = statements[0] + ";"
