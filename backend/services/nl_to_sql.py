@@ -1,3 +1,4 @@
+# backend/services/nl_to_sql.py
 # Converts natural language to SQL using LLM
 import logging
 from typing import Optional
@@ -75,4 +76,24 @@ class NLToSQLService:
 
         logger.info(f"Generated SQL for '{question}':\n{sql}")
 
+        logger.info(f"Generated SQL for '{question}':\n{sql}")
+
         return sql
+
+    async def explain(self, question: str, sql: str) -> str:
+        """
+        Generates a plain-English explanation of what the SQL does.
+        Lightweight single-sentence summary for the frontend.
+        """
+        prompt = (
+            f"In one sentence, explain what this SQL query does in plain English "
+            f"for a non-technical user. Be specific — mention the tables/filters used.\n\n"
+            f"User question: {question}\n"
+            f"SQL: {sql}\n\n"
+            f"Explanation:"
+        )
+        # try:
+        #     return (await self.gemini.generate(prompt)).strip().rstrip('"').rstrip("'")
+        # except Exception:
+        #     return ""  # explanation is non-critical — never fail the pipeline
+        return ""

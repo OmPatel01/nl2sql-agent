@@ -1,7 +1,7 @@
+# backend/api/routes/query.py
 # Handles POST /query — main NL query endpoint
 import logging
 from fastapi import APIRouter, HTTPException
-
 from backend.config import get_settings, AppMode
 from backend.models.request import QueryRequest
 from backend.models.response import QueryResponse, WarningDetail
@@ -96,8 +96,41 @@ async def run_query(body: QueryRequest) -> QueryResponse:
     # ── Step 2 : Get conversation history ─────────────────────
     history = get_history(session_id)
 
+    # ── Step 3a : Ambiguity check ───────────────────────────
+    is_ambiguous, level = ClassifierService.is_ambiguous(question)
+
+    if is_ambiguous and level == "high":
+        return QueryResponse(
+            success    = False,
+            question   = question,
+            error      = "Your query is too vague. Please provide more details.",
+            warnings   = [
+                WarningDetail(
+                    code="AMBIGUOUS_QUERY",
+                    message="Query is too vague. Add more details like filters, metrics, or entities."
+                )
+            ],
+            session_id = session_id,
+        )
+
     # ── Step 3 : Classify ─────────────────────────────────────
     schema_text    = await schema_svc.get_prompt_text()
+
+    # ── Step 3b : Schema relevance (Layer 1) ────────────────
+    if not ClassifierService.is_schema_relevant(question, schema_text):
+        return QueryResponse(
+            success    = False,
+            question   = question,
+            error      = "Query is not related to the database schema.",
+            warnings   = [
+                WarningDetail(
+                    code="OUT_OF_SCOPE",
+                    message="This question cannot be answered using the current database."
+                )
+            ],
+            session_id = session_id,
+        )
+
     classification = await classifier.classify(question, schema_text)
 
     if not classification.is_valid:
@@ -127,6 +160,12 @@ async def run_query(body: QueryRequest) -> QueryResponse:
     confidence    = _confidence.evaluate(sql, question)
     warnings      = confidence.warnings   # may be empty
 
+    if is_ambiguous and level == "low":
+        warnings.append(WarningDetail(
+            code="AMBIGUOUS_QUERY",
+            message="Query was ambiguous. Assumed best interpretation."
+        ))
+
     # ── Step 6 : Validate SQL ─────────────────────────────────
     validation = _validator.validate(sql)
 
@@ -138,6 +177,9 @@ async def run_query(body: QueryRequest) -> QueryResponse:
             generated_sql = sql,   # show what was generated even if rejected
             error         = validation.reason,
             warnings      = warnings,
+            returned_rows = result["row_count"],
+            total_rows    = result["total_rows"],
+            truncated     = result["truncated"],
             session_id    = session_id,
         )
 
@@ -165,6 +207,9 @@ async def run_query(body: QueryRequest) -> QueryResponse:
             ),
         ))
 
+    # ── Step 7b : Generate explanation
+    explanation = await nl_to_sql.explain(question, validation.sanitised_sql)
+
     # ── Step 8 : Store turn ───────────────────────────────────
     add_turn(session_id, question, validation.sanitised_sql)
 
@@ -178,6 +223,7 @@ async def run_query(body: QueryRequest) -> QueryResponse:
         success       = True,
         question      = question,
         generated_sql = validation.sanitised_sql,
+        explanation   = explanation, 
         columns       = result["columns"],
         rows          = result["rows"],
         row_count     = result["row_count"],

@@ -3,7 +3,7 @@ import logging
 from typing import Any, Optional
 
 import asyncpg
-
+import re
 from backend.config import get_settings
 from backend.db.connection import get_pool
 
@@ -45,9 +45,34 @@ class QueryExecutor:
                 # Read-only safety net at the DB level
                 await conn.execute("SET TRANSACTION READ ONLY")
 
-                rows = await conn.fetch(sql)
+                # limit_plus_one_sql = sql.rstrip(";") + f"\nLIMIT {settings.MAX_RESULT_ROWS + 1};"
+                sql_upper = sql.upper()
 
-            return self._format_results(rows)
+                limit_match = re.search(r"\bLIMIT\s+(\d+)", sql_upper)
+
+                if limit_match:
+                    user_limit = int(limit_match.group(1))
+
+                    if user_limit > settings.MAX_RESULT_ROWS:
+                        # Cap to max limit
+                        final_sql = re.sub(
+                            r"\bLIMIT\s+\d+",
+                            f"LIMIT {settings.MAX_RESULT_ROWS}",
+                            sql,
+                            flags=re.IGNORECASE
+                        )
+                    else:
+                        # Respect user's limit
+                        final_sql = sql
+                else:
+                    # No LIMIT → apply safety limit +1
+                    final_sql = sql.rstrip(";") + f"\nLIMIT {settings.MAX_RESULT_ROWS + 1};"
+
+                logger.warning(f"FINAL SQL BEING EXECUTED:\n{final_sql}")
+
+                rows = await conn.fetch(final_sql)
+
+                return self._format_results(rows)
 
         except asyncpg.PostgresError as e:
             logger.error(f"PostgreSQL error executing query: {e}\nSQL: {sql}")
@@ -79,8 +104,15 @@ class QueryExecutor:
         columns = list(rows[0].keys())
 
         # Cap rows to MAX_RESULT_ROWS
-        truncated   = len(rows) > settings.MAX_RESULT_ROWS
+        total_fetched = len(rows)
+        truncated = total_fetched > settings.MAX_RESULT_ROWS
         capped_rows = rows[:settings.MAX_RESULT_ROWS]
+
+        total_rows = total_fetched
+
+        # If truncated, we only know "at least N"
+        if truncated:
+            total_rows = f">{settings.MAX_RESULT_ROWS}"
 
         # Convert each Record to a plain list, serialising non-JSON types
         serialised_rows = [
@@ -94,9 +126,11 @@ class QueryExecutor:
         )
 
         return {
-            "columns"  : columns,
-            "rows"     : serialised_rows,
+            "columns": columns,
+            "rows": serialised_rows,
             "row_count": len(capped_rows),
+            "returned_rows": len(capped_rows),
+            "total_rows": total_rows,
             "truncated": truncated,
         }
 

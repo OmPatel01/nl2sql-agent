@@ -67,6 +67,11 @@ class ConfidenceEvaluator:
         if w:
             warnings.append(w)
 
+        # ── Check 6 : Strict ILIKE without wildcards ──────────────
+        w = self._check_strict_ilike(sql)
+        if w:
+            warnings.append(w)
+
         # Mark low confidence if any warning was raised
         is_confident = len(warnings) == 0
 
@@ -186,6 +191,25 @@ class ConfidenceEvaluator:
                     message = (
                         f"Question contains vague language ('{word}'). "
                         "The generated SQL may not match your intent exactly."
+                    ),
+                )
+        return None
+    
+    @staticmethod
+    def _check_strict_ilike(sql: str) -> WarningDetail | None:
+        """
+        Warn if ILIKE is used without % wildcards — meaning it's an
+        exact case-insensitive match, which often misses real results.
+        e.g.  ILIKE 'Fiction'  instead of  ILIKE '%Fiction%'
+        """
+        matches = re.findall(r"ILIKE\s+'([^']*)'", sql, re.IGNORECASE)
+        for match in matches:
+            if "%" not in match:
+                return WarningDetail(
+                    code    = "STRICT_MATCH",
+                    message = (
+                        f"Query uses exact text match (ILIKE '{match}'). "
+                        "Consider partial matching (ILIKE '%value%') for broader results."
                     ),
                 )
         return None

@@ -1,8 +1,9 @@
+# backend/services/classifier.py
 # Classifies queries (valid vs irrelevant)
 import logging
 import re
+import difflib
 from dataclasses import dataclass
-
 from backend.llm.gemini_provider import GeminiProvider
 from backend.prompts.classifier import build_classifier_prompt
 
@@ -95,6 +96,59 @@ class ClassifierService:
 
         return None  # No fast reject — send to LLM classifier
 
+    @staticmethod
+    def is_ambiguous(question: str) -> tuple[bool, str]:
+        """
+        Detects ambiguous queries.
+
+        Returns:
+            (is_ambiguous, level)
+            level: "high" (reject) or "low" (warn)
+        """
+        q = question.strip().lower()
+        words = q.split()
+
+        vague_terms = {"show", "list", "give", "data", "info", "details", "top"}
+
+        # Very vague → reject
+        if len(words) <= 2:
+            return True, "high"
+
+        # Slightly vague → allow but warn
+        if any(w in vague_terms for w in words) and len(words) <= 4:
+            return True, "low"
+
+        return False, "none"
+
+
+    @staticmethod
+    def is_schema_relevant(question: str, schema_text: str) -> bool:
+        """
+        Fast keyword-based schema relevance check (Layer 1).
+        """
+        q = question.lower()
+
+        # extract table/column names from schema text
+        schema_words = set(re.findall(r"\b[a-zA-Z_]+\b", schema_text.lower()))
+
+        def _is_similar(word, schema_words):
+            for schema_word in schema_words:
+                # partial match
+                if word in schema_word:
+                    return True
+
+                # fuzzy match for typos
+                if difflib.SequenceMatcher(None, word, schema_word).ratio() > 0.75:
+                    return True
+
+            return False
+
+        matches = [
+            word for word in q.split()
+            if _is_similar(word, schema_words)
+        ]
+
+        return len(matches) > 0
 
     @staticmethod
     def _parse_response(raw: str) -> ClassificationResult:

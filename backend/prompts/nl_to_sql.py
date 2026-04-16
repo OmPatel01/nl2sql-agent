@@ -1,3 +1,4 @@
+# backend/prompts/nl_to_sql.py
 # Prompt builder for NL to SQL conversion
 def build_nl_to_sql_prompt(
     question   : str,
@@ -38,7 +39,7 @@ STRICT RULES — you must follow all of these:
 3. Only reference tables and columns that exist in the schema above.
 4. Always use explicit JOIN ... ON syntax. Never use implicit joins (comma-separated tables).
 5. Use table aliases for clarity when joining multiple tables.
-6. If filtering on text columns, use ILIKE for case-insensitive matching.
+6. For text filters, always use partial matching: ILIKE '%value%' — never bare ILIKE 'value' unless the user explicitly asks for an exact match.
 7. Always end the query with a semicolon.
 8. If the question asks for "top N" or "most", use ORDER BY ... LIMIT N.
 9. If a column could belong to multiple tables, qualify it with the table name or alias.
