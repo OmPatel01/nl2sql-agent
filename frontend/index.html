@@ -1,1 +1,181 @@
 <!-- Main UI -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NL → SQL Assistant</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+
+  <!-- ── HEADER ─────────────────────────────────── -->
+  <header class="header">
+    <div class="header-inner">
+      <div class="logo">
+        <span class="logo-icon">⚡</span>
+        <span>NL <span class="arrow">→</span> SQL Assistant</span>
+      </div>
+      <div id="connection-badge" class="badge badge--disconnected">● Disconnected</div>
+    </div>
+  </header>
+
+  <main class="main">
+
+    <!-- ── CONNECTION PANEL ───────────────────────── -->
+    <section class="card" id="connection-panel">
+      <div class="card-header">
+        <h2 class="card-title">🔌 Connect to Database</h2>
+        <p class="card-subtitle">Enter your credentials to start querying</p>
+      </div>
+      <div class="card-body">
+        <div class="form-grid">
+          <div class="form-group">
+            <label for="db-url">Database URL</label>
+            <input
+              type="text"
+              id="db-url"
+              placeholder="postgresql+asyncpg://user:pass@host:port/db"
+              autocomplete="off"
+            />
+          </div>
+          <div class="form-group">
+            <label for="api-key">Gemini API Key</label>
+            <input
+              type="password"
+              id="api-key"
+              placeholder="Your Gemini API key"
+              autocomplete="off"
+            />
+          </div>
+        </div>
+        <div class="form-actions">
+          <button id="connect-btn" class="btn btn--primary">
+            <span class="btn-text">Connect</span>
+            <span class="btn-spinner hidden">⟳</span>
+          </button>
+          <span id="connect-msg" class="status-msg"></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── QUERY + SCHEMA ROW ─────────────────────── -->
+    <div class="two-col">
+
+      <!-- ── QUERY SECTION ────────────────────────── -->
+      <section class="card" id="query-section">
+        <div class="card-header">
+          <h2 class="card-title">💬 Ask a Question</h2>
+          <p class="card-subtitle">Type in plain English — we'll write the SQL</p>
+        </div>
+        <div class="card-body">
+          <div class="form-group">
+            <textarea
+              id="question-input"
+              rows="3"
+              placeholder="e.g. Show me all overdue borrowings with member names"
+            ></textarea>
+          </div>
+          <div class="form-actions">
+            <button id="query-btn" class="btn btn--primary" disabled>
+              <span class="btn-text">Run Query</span>
+              <span class="btn-spinner hidden">⟳</span>
+            </button>
+            <button id="reset-btn" class="btn btn--ghost" disabled>Clear</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── SCHEMA PANEL ──────────────────────────── -->
+      <section class="card" id="schema-section">
+        <div class="card-header">
+          <h2 class="card-title">🗄️ Schema Status</h2>
+          <p class="card-subtitle">Live metadata about your database schema</p>
+        </div>
+        <div class="card-body">
+          <div id="schema-info" class="schema-info">
+            <div class="schema-stat">
+              <span class="schema-stat__label">Version</span>
+              <span class="schema-stat__value" id="schema-version">—</span>
+            </div>
+            <div class="schema-stat">
+              <span class="schema-stat__label">Tables</span>
+              <span class="schema-stat__value" id="schema-tables">—</span>
+            </div>
+            <div class="schema-stat">
+              <span class="schema-stat__label">Last Updated</span>
+              <span class="schema-stat__value" id="schema-updated">—</span>
+            </div>
+          </div>
+          <div class="form-actions" style="margin-top: 1rem;">
+            <button id="refresh-schema-btn" class="btn btn--secondary" disabled>
+              <span class="btn-text">↻ Refresh Schema</span>
+              <span class="btn-spinner hidden">⟳</span>
+            </button>
+            <span id="schema-msg" class="status-msg"></span>
+          </div>
+        </div>
+      </section>
+
+    </div>
+
+    <!-- ── RESULTS PANEL ──────────────────────────── -->
+    <section class="card hidden" id="results-section">
+      <div class="card-header">
+        <h2 class="card-title">📊 Results</h2>
+        <div id="result-meta" class="result-meta"></div>
+      </div>
+      <div class="card-body">
+
+        <!-- Warnings -->
+        <div id="warnings-container" class="warnings-container hidden"></div>
+
+        <!-- Generated SQL -->
+        <div class="sql-block">
+          <div class="sql-block__header">
+            <span class="sql-block__label">Generated SQL</span>
+            <button id="copy-sql-btn" class="btn btn--ghost btn--sm">Copy</button>
+          </div>
+          <pre id="sql-output" class="sql-code"></pre>
+        </div>
+
+        <!-- Results Table -->
+        <div class="table-wrapper" id="table-wrapper">
+          <div id="table-container"></div>
+          <div id="table-meta" class="table-meta"></div>
+        </div>
+
+        <!-- Explain Section -->
+        <div class="explain-section">
+          <button id="explain-btn" class="btn btn--accent">
+            <span class="btn-text">✨ Explain this result</span>
+            <span class="btn-spinner hidden">⟳</span>
+          </button>
+          <div id="explanation-box" class="explanation-box hidden">
+            <span class="explanation-box__icon">💡</span>
+            <p id="explanation-text"></p>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ── ERROR PANEL ────────────────────────────── -->
+    <section class="card hidden" id="error-section">
+      <div class="card-body">
+        <div class="error-box">
+          <span class="error-box__icon">⚠️</span>
+          <p id="error-text"></p>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="footer">
+    <p>NL → SQL Assistant · Powered by Gemini + FastAPI</p>
+  </footer>
+
+  <script src="js/app.js"></script>
+</body>
+</html>
