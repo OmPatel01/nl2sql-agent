@@ -144,6 +144,23 @@
           <div id="table-container"></div>
           <div id="table-meta" class="table-meta"></div>
         </div>
+        
+        <!-- ── EXPORT TOOLBAR (shown after results load) ── -->
+        <div id="export-toolbar" class="export-toolbar hidden">
+          <span class="export-toolbar__label">Export results</span>
+          <div class="export-toolbar__actions">
+            <button id="copy-table-btn" class="btn btn--ghost btn--sm">
+              📋 Copy as Table
+            </button>
+            <button id="download-csv-btn" class="btn btn--ghost btn--sm">
+              ⬇ Download CSV
+            </button>
+            <button id="download-excel-btn" class="btn btn--secondary btn--sm">
+              ⬇ Download Excel
+            </button>
+          </div>
+          <span id="export-msg" class="status-msg export-msg"></span>
+        </div>
 
         <!-- Explain Section -->
         <div class="explain-section">

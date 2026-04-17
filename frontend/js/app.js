@@ -54,6 +54,13 @@ const els = {
   // Error
   errorSection    : $("error-section"),
   errorText       : $("error-text"),
+
+  // Export
+  exportToolbar    : $("export-toolbar"),
+  copyTableBtn     : $("copy-table-btn"),
+  downloadCsvBtn   : $("download-csv-btn"),
+  downloadExcelBtn : $("download-excel-btn"),
+  exportMsg        : $("export-msg"),
 };
 
 // ══════════════════════════════════════════════════════════
@@ -266,24 +273,25 @@ async function handleQuery() {
 }
 
 function renderResults(data) {
-  // Show results section
   els.resultsSection.classList.remove("hidden");
 
-  // Warnings
   renderWarnings(data.warnings || []);
-
-  // Generated SQL
   els.sqlOutput.textContent = data.generated_sql || "";
 
-  // Result meta (above card header)
   const rowInfo = data.truncated
     ? `Showing ${data.returned_rows} of ${data.total_rows}+ rows`
     : `${data.row_count} row${data.row_count !== 1 ? "s" : ""} returned`;
-
   els.resultMeta.textContent = rowInfo;
 
-  // Table
   renderTable(data.columns || [], data.rows || [], data.truncated);
+
+  // Store data for export and reveal toolbar (only if there are results)
+  if ((data.columns || []).length > 0) {
+    storeExportData(data.columns, data.rows || []);
+    els.exportToolbar.classList.remove("hidden");
+  } else {
+    els.exportToolbar.classList.add("hidden");
+  }
 }
 
 function renderWarnings(warnings) {
@@ -396,6 +404,8 @@ function resetResultsUI() {
   els.tableContainer.innerHTML    = "";
   els.tableMeta.innerHTML         = "";
   els.resultMeta.textContent      = "";
+  els.exportToolbar.classList.add("hidden");   // ← ADD THIS LINE
+  _exportData = { columns: [], rows: [] };      // ← ADD THIS LINE
 }
 
 function hideResults() {
@@ -479,6 +489,91 @@ function friendlyError(msg = "") {
 }
 
 // ══════════════════════════════════════════════════════════
+//  EXPORT — Copy Table / Download CSV / Download Excel
+// ══════════════════════════════════════════════════════════
+
+// Internal store for the current result data
+let _exportData = { columns: [], rows: [] };
+
+function storeExportData(columns, rows) {
+  _exportData = { columns, rows };
+}
+
+function flashExportMsg(text, type = "success") {
+  els.exportMsg.textContent = text;
+  els.exportMsg.className   = `status-msg status-msg--${type} export-msg`;
+  setTimeout(() => { els.exportMsg.textContent = ""; }, 2500);
+}
+
+// 1. Copy as tab-separated table (pastes cleanly into Excel/Sheets)
+async function handleCopyTable() {
+  const { columns, rows } = _exportData;
+  if (!columns.length) return;
+
+  const header = columns.join("\t");
+  const body   = rows.map(r => r.map(v => (v === null ? "" : String(v))).join("\t")).join("\n");
+  const text   = header + "\n" + body;
+
+  try {
+    await navigator.clipboard.writeText(text);
+    flashExportMsg("✓ Copied to clipboard");
+  } catch {
+    flashExportMsg("Clipboard not available", "error");
+  }
+}
+
+// 2. Download as CSV
+function handleDownloadCSV() {
+  const { columns, rows } = _exportData;
+  if (!columns.length) return;
+
+  const escape = v => {
+    const s = v === null ? "" : String(v);
+    return s.includes(",") || s.includes('"') || s.includes("\n")
+      ? `"${s.replace(/"/g, '""')}"`
+      : s;
+  };
+
+  const lines = [
+    columns.map(escape).join(","),
+    ...rows.map(r => r.map(escape).join(",")),
+  ];
+
+  const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+  triggerDownload(blob, "query_results.csv");
+  flashExportMsg("✓ CSV downloaded");
+}
+
+// 3. Download as Excel (.xlsx via CSV — opens natively in Excel)
+function handleDownloadExcel() {
+  const { columns, rows } = _exportData;
+  if (!columns.length) return;
+
+  // Build tab-separated values with BOM so Excel detects UTF-8
+  const BOM    = "\uFEFF";
+  const escape = v => (v === null ? "" : String(v).replace(/\t/g, " "));
+  const lines  = [
+    columns.map(escape).join("\t"),
+    ...rows.map(r => r.map(escape).join("\t")),
+  ];
+
+  const blob = new Blob([BOM + lines.join("\n")], { type: "application/vnd.ms-excel;charset=utf-8;" });
+  triggerDownload(blob, "query_results.xls");
+  flashExportMsg("✓ Excel file downloaded");
+}
+
+function triggerDownload(blob, filename) {
+  const url  = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href     = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+// ══════════════════════════════════════════════════════════
 //  EVENT LISTENERS
 // ══════════════════════════════════════════════════════════
 
@@ -521,3 +616,8 @@ els.copySqlBtn.addEventListener("click", handleCopySQL);
     // Schema not ready yet — that's fine
   }
 })();
+
+// Export
+els.copyTableBtn.addEventListener("click", handleCopyTable);
+els.downloadCsvBtn.addEventListener("click", handleDownloadCSV);
+els.downloadExcelBtn.addEventListener("click", handleDownloadExcel);
