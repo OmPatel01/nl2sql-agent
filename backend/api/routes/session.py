@@ -1,3 +1,4 @@
+# backend/api/routes/session.py
 # Handles session retrieval and reset
 import logging
 from fastapi import APIRouter, HTTPException

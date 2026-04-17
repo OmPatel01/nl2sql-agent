@@ -5,6 +5,7 @@
 // ══════════════════════════════════════════════════════════
 
 // ── State ─────────────────────────────────────────────────
+const BASE_URL = "http://127.0.0.1:8000";  // ← Change if backend is hosted elsewhere
 const state = {
   session_id      : null,      // set after POST /session/init
   connected       : false,
@@ -64,7 +65,7 @@ const els = {
  * Returns parsed JSON or throws an Error with a friendly message.
  */
 async function apiPost(endpoint, body) {
-  const res = await fetch(endpoint, {
+  const res = await fetch(BASE_URL + endpoint, {
     method  : "POST",
     headers : { "Content-Type": "application/json" },
     body    : JSON.stringify(body),
@@ -83,8 +84,8 @@ async function apiPost(endpoint, body) {
 /**
  * Generic GET helper.
  */
-async function apiGet(endpoint) {
-  const res = await fetch(endpoint);
+async function apiGet( endpoint) {
+  const res = await fetch(BASE_URL + endpoint);
   const data = await res.json().catch(() => ({}));
 
   if (!res.ok) {

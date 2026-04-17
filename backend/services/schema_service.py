@@ -35,7 +35,7 @@ class SchemaService:
 
         self.database_url = database_url   # None = demo mode
 
-        # 🔥 Detect DB switch
+        # Detect DB switch
         if _last_used_db_url != self.database_url:
             logger.info("Database changed — clearing schema cache.")
             clear_cache(self.database_url)

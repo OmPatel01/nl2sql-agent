@@ -23,7 +23,7 @@ class Session:
     session_id    : str
     database_url  : Optional[str] = None     # ← ADD THIS
     gemini_api_key: Optional[str] = None     # ← ADD THIS
-    history       : deque = field(...)
+    history       : deque =field (default_factory=deque)
 
 # Update get_session_info to return credentials
 def get_session_credentials(session_id: str) -> Optional[tuple[str, str]]:
