@@ -48,7 +48,7 @@ def _get_demo_instances():
 
     return _demo_gemini, _demo_schema
 
-
+database_url = None  # will be overridden in CUSTOM mode
 # ── Route ─────────────────────────────────────────────────────
 
 @router.post("", response_model=QueryResponse)
@@ -115,7 +115,10 @@ async def run_query(body: QueryRequest) -> QueryResponse:
         raise HTTPException(status_code=400, detail="Invalid mode")
 
     classifier = ClassifierService(gemini=gemini)
-    nl_to_sql  = NLToSQLService(gemini=gemini, database_url=database_url if body.mode == AppMode.CUSTOM else None)
+    nl_to_sql = NLToSQLService(
+    gemini=gemini,
+    database_url=database_url if body.mode == AppMode.CUSTOM else None
+)
 
     # ── Step 2 : Get conversation history ─────────────────────
     history = get_history(session_id)
@@ -198,13 +201,11 @@ async def run_query(body: QueryRequest) -> QueryResponse:
         return QueryResponse(
             success       = False,
             question      = question,
-            generated_sql = sql,   # show what was generated even if rejected
+            generated_sql = sql,
             error         = validation.reason,
             warnings      = warnings,
-            returned_rows = result["row_count"],
-            total_rows    = result["total_rows"],
-            truncated     = result["truncated"],
             session_id    = session_id,
+            # Don't reference result here — it hasn't been fetched yet
         )
 
     # ── Step 7 : Execute ──────────────────────────────────────

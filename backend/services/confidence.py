@@ -155,9 +155,10 @@ class ConfidenceEvaluator:
     @staticmethod
     def _check_missing_limit(sql: str, sql_upper: str) -> WarningDetail | None:
         """
-        Warn if there is no LIMIT clause and no aggregate function.
-        Aggregates (COUNT, SUM, AVG, MAX, MIN) naturally return few rows
-        so they don't need a LIMIT warning.
+        Removed generic no-LIMIT warning. It fired on every "show all X" query
+        even when the result set was small. The executor enforces MAX_RESULT_ROWS
+        as a hard cap; a LARGE_RESULT warning is appended post-execution only
+        when rows were actually truncated.
         """
         has_limit     = "LIMIT" in sql_upper
         has_aggregate = bool(

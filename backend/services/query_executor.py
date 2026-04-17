@@ -46,15 +46,14 @@ class QueryExecutor:
                 await conn.execute("SET TRANSACTION READ ONLY")
 
                 # limit_plus_one_sql = sql.rstrip(";") + f"\nLIMIT {settings.MAX_RESULT_ROWS + 1};"
-                sql_upper = sql.upper()
+# Replace the entire limit block with this cleaner version:
 
+                sql_upper = sql.upper()
                 limit_match = re.search(r"\bLIMIT\s+(\d+)", sql_upper)
 
                 if limit_match:
                     user_limit = int(limit_match.group(1))
-
                     if user_limit > settings.MAX_RESULT_ROWS:
-                        # Cap to max limit
                         final_sql = re.sub(
                             r"\bLIMIT\s+\d+",
                             f"LIMIT {settings.MAX_RESULT_ROWS}",
@@ -62,10 +61,9 @@ class QueryExecutor:
                             flags=re.IGNORECASE
                         )
                     else:
-                        # Respect user's limit
-                        final_sql = sql
+                        final_sql = sql  # user's limit is reasonable, respect it
                 else:
-                    # No LIMIT → apply safety limit +1
+                    # No LIMIT — fetch one extra to detect truncation without a COUNT query
                     final_sql = sql.rstrip(";") + f"\nLIMIT {settings.MAX_RESULT_ROWS + 1};"
 
                 logger.warning(f"FINAL SQL BEING EXECUTED:\n{final_sql}")
