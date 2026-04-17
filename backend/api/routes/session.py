@@ -1,6 +1,9 @@
 # Handles session retrieval and reset
 import logging
 from fastapi import APIRouter, HTTPException
+from backend.models.request import CredentialsInput
+from backend.services.session_manager import set_session_credentials
+import uuid
 
 from backend.models.response import SessionInfo
 from backend.services.session_manager import (
@@ -15,6 +18,34 @@ router = APIRouter(prefix="/session", tags=["Session"])
 
 
 # ── Routes ────────────────────────────────────────────────────
+@router.post("/init")
+async def init_session(body: CredentialsInput) -> dict:
+    """
+    Initialises a session with user credentials (custom mode).
+    
+    Request:
+    {
+        "database_url": "postgresql://...",
+        "gemini_api_key": "..."
+    }
+    
+    Returns:
+    {
+        "session_id": "uuid",
+        "mode": "custom"
+    }
+    """
+    session_id = str(uuid.uuid4())
+    
+    # Store credentials in the session
+    set_session_credentials(session_id, body.database_url, body.gemini_api_key)
+    
+    logger.info(f"Session init: {session_id} in custom mode")
+    
+    return {
+        "session_id": session_id,
+        "mode": "custom"
+    }
 
 @router.get("/{session_id}", response_model=SessionInfo)
 async def get_session(session_id: str) -> SessionInfo:

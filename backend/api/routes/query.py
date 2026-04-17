@@ -16,6 +16,8 @@ from backend.services.session_manager import (
     get_history,
     add_turn,
 )
+from backend.services.session_manager import get_session_credentials
+from backend.db.connection import create_pool  # ← need this
 
 logger   = logging.getLogger(__name__)
 settings = get_settings()
@@ -77,21 +79,43 @@ async def run_query(body: QueryRequest) -> QueryResponse:
 
     logger.info(f"Query received | session={session_id} | question='{question}'")
 
-    # ── Step 1 : Resolve services ─────────────────────────────
+    # ── Step 1 : Resolve services based on mode ───────────────
     if body.mode == AppMode.DEMO:
         gemini, schema_svc = _get_demo_instances()
-        executor = QueryExecutor()
+        executor = QueryExecutor()  # Uses settings.DATABASE_URL
+        
+    elif body.mode == AppMode.CUSTOM:
+        # Fetch credentials from session store
+        creds = get_session_credentials(session_id)
+        
+        if not creds:
+            raise HTTPException(
+                status_code=401,
+                detail="Session credentials not found. Call /session/init first."
+            )
+        
+        database_url, gemini_api_key = creds
+        
+        try:
+            # Create fresh pool for this user's database
+            pool = await create_pool(database_url)
+        except Exception as e:
+            logger.error(f"Failed to connect to user database: {e}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot connect to your database: {str(e)}"
+            )
+        
+        # Create instances with user's credentials
+        gemini     = GeminiProvider(api_key=gemini_api_key)
+        schema_svc = SchemaService(database_url=database_url)
+        executor   = QueryExecutor(database_url=database_url)
+    
     else:
-        # Custom mode — user credentials required
-        # (CredentialsInput handled by a separate /session/init endpoint)
-        # For now raise clearly — will be wired in session route
-        raise HTTPException(
-            status_code = 501,
-            detail      = "Custom mode is not yet wired. Use mode='demo'.",
-        )
+        raise HTTPException(status_code=400, detail="Invalid mode")
 
     classifier = ClassifierService(gemini=gemini)
-    nl_to_sql  = NLToSQLService(gemini=gemini)
+    nl_to_sql  = NLToSQLService(gemini=gemini, database_url=database_url if body.mode == AppMode.CUSTOM else None)
 
     # ── Step 2 : Get conversation history ─────────────────────
     history = get_history(session_id)

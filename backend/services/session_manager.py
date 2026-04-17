@@ -19,14 +19,37 @@ class Turn:
 
 @dataclass
 class Session:
-    """
-    Holds conversation history for one user session.
-    Uses a deque with maxlen so old turns are dropped automatically.
-    """
-    session_id: str
-    history   : deque = field(default_factory=lambda: deque(
-        maxlen=settings.SESSION_MAX_HISTORY
-    ))
+    """Holds conversation history + user credentials for custom mode."""
+    session_id    : str
+    database_url  : Optional[str] = None     # ← ADD THIS
+    gemini_api_key: Optional[str] = None     # ← ADD THIS
+    history       : deque = field(...)
+
+# Update get_session_info to return credentials
+def get_session_credentials(session_id: str) -> Optional[tuple[str, str]]:
+    """Returns (database_url, gemini_api_key) or None."""
+    if session_id not in _sessions:
+        return None
+    
+    session = _sessions[session_id]
+    if session.database_url and session.gemini_api_key:
+        return (session.database_url, session.gemini_api_key)
+    
+    return None
+
+# Store credentials
+def set_session_credentials(
+    session_id: str, 
+    database_url: str, 
+    gemini_api_key: str
+) -> None:
+    """Stores credentials for a session."""
+    if session_id not in _sessions:
+        _sessions[session_id] = Session(session_id=session_id)
+    
+    _sessions[session_id].database_url   = database_url
+    _sessions[session_id].gemini_api_key = gemini_api_key
+    logger.info(f"Credentials stored for session {session_id}")
 
 
 # ── Module-level session store ────────────────────────────────

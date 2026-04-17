@@ -139,18 +139,19 @@ async function handleConnect() {
   setLoading(els.connectBtn, true);
 
   try {
-    const data = await apiPost("/session/init", { database_url, gemini_api_key });
+    // Call /session/init with credentials
+    const data = await apiPost("/session/init", {
+      database_url,
+      gemini_api_key,
+    });
 
-    // Store session
     state.session_id = data.session_id;
+    state.mode       = data.mode || "custom";  // ← Track which mode
     state.connected  = true;
 
-    // Update UI
     setMsg(els.connectMsg, "✓ Connected successfully", "success");
     updateConnectionBadge(true);
     enableQueryUI();
-
-    // Load schema info after connecting
     await loadSchemaInfo();
 
   } catch (err) {
@@ -229,35 +230,28 @@ async function handleRefreshSchema() {
 //  QUERY
 // ══════════════════════════════════════════════════════════
 
+// Update query to send the mode
 async function handleQuery() {
   const question = els.questionInput.value.trim();
 
-  if (!question) return;
+  if (!question || !state.session_id) return;
 
-  if (!state.session_id) {
-    showError("Please connect to a database first.");
-    return;
-  }
-
-  // Reset UI for new query
   resetResultsUI();
   setLoading(els.queryBtn, true);
 
   try {
     const data = await apiPost("/query", {
       question,
-      session_id : state.session_id,
-      mode       : "demo",
+      session_id: state.session_id,
+      mode: state.mode || "demo",  // ← Send the actual mode
     });
 
     if (data.success) {
       state.currentSQL      = data.generated_sql;
       state.currentQuestion = question;
-
       renderResults(data);
       hideError();
     } else {
-      // API returned success=false — show the reason
       showError(data.error || "Query could not be processed.");
       hideResults();
     }
