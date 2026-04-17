@@ -112,8 +112,22 @@
               <span class="btn-text">↻ Refresh Schema</span>
               <span class="btn-spinner hidden">⟳</span>
             </button>
+            <button id="view-tables-btn" class="btn btn--ghost">
+              <span class="btn-text">⊞ View Tables</span>
+              <span class="btn-spinner hidden">⟳</span>
+            </button>
             <span id="schema-msg" class="status-msg"></span>
           </div>
+
+          <!-- ── SCHEMA EXPLORER ──────────────────── -->
+          <div id="schema-explorer" class="schema-explorer hidden">
+            <div class="schema-explorer__header">
+              <span class="schema-explorer__title">Database Tables</span>
+              <button id="close-explorer-btn" class="schema-explorer__close" title="Close">✕</button>
+            </div>
+            <ul id="schema-table-list" class="schema-table-list"></ul>
+          </div>
+
         </div>
       </section>
 

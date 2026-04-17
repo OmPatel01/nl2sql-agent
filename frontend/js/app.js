@@ -12,6 +12,7 @@ const state = {
   currentSQL      : null,      // last generated SQL
   currentQuestion : null,
   explainCache    : {},        // key = session_id + sql → explanation string
+  schemaCache     : null,      // cached GET /schema response (null = not yet fetched)
 };
 
 // ── Element refs ──────────────────────────────────────────
@@ -36,6 +37,12 @@ const els = {
   schemaUpdated   : $("schema-updated"),
   refreshSchemaBtn: $("refresh-schema-btn"),
   schemaMsg       : $("schema-msg"),
+
+  // Schema Explorer
+  viewTablesBtn   : $("view-tables-btn"),
+  schemaExplorer  : $("schema-explorer"),
+  schemaTableList : $("schema-table-list"),
+  closeExplorerBtn: $("close-explorer-btn"),
 
   // Results
   resultsSection  : $("results-section"),
@@ -91,7 +98,7 @@ async function apiPost(endpoint, body) {
 /**
  * Generic GET helper.
  */
-async function apiGet( endpoint) {
+async function apiGet(endpoint) {
   const res = await fetch(BASE_URL + endpoint);
   const data = await res.json().catch(() => ({}));
 
@@ -194,6 +201,9 @@ async function loadSchemaInfo() {
   try {
     const data = await apiGet("/schema");
     renderSchemaInfo(data);
+
+    // Also warm the schema cache so View Tables is instant
+    state.schemaCache = data;
   } catch {
     // Non-critical — silently ignore if schema fetch fails on load
   }
@@ -224,6 +234,14 @@ async function handleRefreshSchema() {
       setMsg(els.schemaMsg, "✓ Schema is already up to date", "info");
     }
 
+    // Invalidate the explorer cache so it re-fetches on next open
+    state.schemaCache = null;
+
+    // If explorer is currently open, re-render it with fresh data
+    if (!els.schemaExplorer.classList.contains("hidden")) {
+      await fetchAndRenderExplorer();
+    }
+
     // Refresh the displayed metadata
     await loadSchemaInfo();
 
@@ -232,6 +250,200 @@ async function handleRefreshSchema() {
   } finally {
     setLoading(els.refreshSchemaBtn, false);
   }
+}
+
+// ══════════════════════════════════════════════════════════
+//  SCHEMA EXPLORER
+// ══════════════════════════════════════════════════════════
+
+/**
+ * Handles the "View Tables" button click.
+ * Toggles the explorer open/closed.
+ * On first open, fetches schema; subsequent opens use the cache.
+ */
+async function handleViewTables() {
+  const isOpen = !els.schemaExplorer.classList.contains("hidden");
+
+  if (isOpen) {
+    // Already open — close it and relabel button
+    closeExplorer();
+    return;
+  }
+
+  // Open and load
+  els.schemaExplorer.classList.remove("hidden");
+  updateViewTablesBtn(true);
+
+  if (state.schemaCache) {
+    // Schema already loaded — render immediately, no spinner needed
+    renderExplorer(state.schemaCache);
+  } else {
+    await fetchAndRenderExplorer();
+  }
+}
+
+/**
+ * Fetches /schema, caches the result, and renders the explorer.
+ * Shows a subtle loading indicator while fetching.
+ */
+async function fetchAndRenderExplorer() {
+  // Show a loading placeholder
+  els.schemaTableList.innerHTML = `
+    <li class="schema-explorer-loading">Loading tables…</li>
+  `;
+
+  try {
+    const data = await apiGet("/schema");
+    state.schemaCache = data;
+    renderSchemaInfo(data);   // Also keep the stats panel fresh
+    renderExplorer(data);
+  } catch (err) {
+    els.schemaTableList.innerHTML = `
+      <li class="schema-explorer-loading" style="color: var(--danger);">
+        Failed to load schema: ${escapeHtml(err.message)}
+      </li>
+    `;
+  }
+}
+
+/**
+ * Renders the list of table names into the explorer.
+ * Each table row is clickable to toggle its columns.
+ *
+ * @param {Object} schemaData  - the /schema API response
+ */
+function renderExplorer(schemaData) {
+  const tables = schemaData.tables || [];
+
+  if (!tables.length) {
+    els.schemaTableList.innerHTML = `
+      <li class="schema-explorer-loading">No tables found.</li>
+    `;
+    return;
+  }
+
+  // Build a Set of FK "from" columns per table for badge lookup.
+  // The API gives us foreign_keys as strings like "book_id → books.book_id"
+  // so we parse the left-hand side.
+  const fkMap = buildFkMap(tables);
+
+  // Build a Set of PK columns per table.
+  const pkMap = buildPkMap(tables);
+
+  els.schemaTableList.innerHTML = tables.map((table, idx) => {
+    const tableName  = escapeHtml(table.table_name);
+    const colCount   = (table.columns || []).length;
+    const fkCols     = fkMap[table.table_name] || new Set();
+    const pkCols     = pkMap[table.table_name] || new Set();
+
+    const columnsHtml = (table.columns || []).map(col => {
+      const colName = escapeHtml(col);
+      const isPk    = pkCols.has(col);
+      const isFk    = fkCols.has(col);
+
+      const pkBadge = isPk ? `<span class="schema-column-pk">PK</span>` : "";
+      const fkBadge = isFk ? `<span class="schema-column-fk">FK</span>` : "";
+
+      return `
+        <li class="schema-column-item">
+          <span class="schema-column-name">${colName}</span>
+          ${pkBadge}${fkBadge}
+        </li>
+      `;
+    }).join("");
+
+    return `
+      <li class="schema-table-item" data-table-idx="${idx}">
+        <button class="schema-table-toggle" type="button"
+                aria-expanded="false"
+                aria-controls="schema-cols-${idx}">
+          <span class="schema-chevron">▶</span>
+          <span class="schema-table-icon">⊡</span>
+          <span class="schema-table-name">${tableName}</span>
+          <span class="schema-col-count">${colCount}</span>
+        </button>
+        <ul class="schema-columns-list" id="schema-cols-${idx}" role="list">
+          ${columnsHtml}
+        </ul>
+      </li>
+    `;
+  }).join("");
+
+  // Attach toggle listeners
+  els.schemaTableList.querySelectorAll(".schema-table-toggle").forEach(btn => {
+    btn.addEventListener("click", handleTableToggle);
+  });
+}
+
+/**
+ * Toggles a table row open or closed.
+ */
+function handleTableToggle(e) {
+  const btn  = e.currentTarget;
+  const item = btn.closest(".schema-table-item");
+  const isOpen = item.classList.contains("is-open");
+
+  // Close all other open rows for a clean accordion-like feel
+  // (optional — comment out to allow multiple open at once)
+  els.schemaTableList.querySelectorAll(".schema-table-item.is-open").forEach(openItem => {
+    if (openItem !== item) {
+      openItem.classList.remove("is-open");
+      openItem.querySelector(".schema-table-toggle").setAttribute("aria-expanded", "false");
+    }
+  });
+
+  // Toggle this row
+  item.classList.toggle("is-open", !isOpen);
+  btn.setAttribute("aria-expanded", String(!isOpen));
+}
+
+/**
+ * Closes the schema explorer and resets the button label.
+ */
+function closeExplorer() {
+  els.schemaExplorer.classList.add("hidden");
+  updateViewTablesBtn(false);
+}
+
+/**
+ * Updates the "View Tables" button label based on open/closed state.
+ */
+function updateViewTablesBtn(isOpen) {
+  const textEl = els.viewTablesBtn.querySelector(".btn-text");
+  if (textEl) {
+    textEl.textContent = isOpen ? "⊟ Hide Tables" : "⊞ View Tables";
+  }
+}
+
+// ── FK / PK helpers ───────────────────────────────────────
+
+/**
+ * Builds a map of table_name → Set of FK column names.
+ * Parses strings like "book_id → books.book_id".
+ */
+function buildFkMap(tables) {
+  const map = {};
+  tables.forEach(table => {
+    const fkCols = new Set();
+    (table.foreign_keys || []).forEach(fkStr => {
+      // fkStr format: "from_col → to_table.to_col"
+      const match = fkStr.match(/^(\w+)\s*→/);
+      if (match) fkCols.add(match[1]);
+    });
+    map[table.table_name] = fkCols;
+  });
+  return map;
+}
+
+/**
+ * Builds a map of table_name → Set of PK column names.
+ */
+function buildPkMap(tables) {
+  const map = {};
+  tables.forEach(table => {
+    map[table.table_name] = new Set(table.primary_keys || []);
+  });
+  return map;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -404,8 +616,8 @@ function resetResultsUI() {
   els.tableContainer.innerHTML    = "";
   els.tableMeta.innerHTML         = "";
   els.resultMeta.textContent      = "";
-  els.exportToolbar.classList.add("hidden");   // ← ADD THIS LINE
-  _exportData = { columns: [], rows: [] };      // ← ADD THIS LINE
+  els.exportToolbar.classList.add("hidden");
+  _exportData = { columns: [], rows: [] };
 }
 
 function hideResults() {
@@ -597,6 +809,12 @@ els.resetBtn.addEventListener("click", handleReset);
 // Schema refresh
 els.refreshSchemaBtn.addEventListener("click", handleRefreshSchema);
 
+// Schema Explorer — View Tables toggle
+els.viewTablesBtn.addEventListener("click", handleViewTables);
+
+// Schema Explorer — close button
+els.closeExplorerBtn.addEventListener("click", closeExplorer);
+
 // Explain (on-demand only)
 els.explainBtn.addEventListener("click", handleExplain);
 
@@ -612,6 +830,8 @@ els.copySqlBtn.addEventListener("click", handleCopySQL);
   try {
     const data = await apiGet("/schema");
     renderSchemaInfo(data);
+    // Warm the cache so View Tables is instant from the first click
+    state.schemaCache = data;
   } catch {
     // Schema not ready yet — that's fine
   }

@@ -92,8 +92,7 @@ class NLToSQLService:
             f"SQL: {sql}\n\n"
             f"Explanation:"
         )
-        # try:
-        #     return (await self.gemini.generate(prompt)).strip().rstrip('"').rstrip("'")
-        # except Exception:
-        #     return ""  # explanation is non-critical — never fail the pipeline
-        return ""
+        try:
+            return (await self.gemini.generate(prompt)).strip().rstrip('"').rstrip("'")
+        except Exception:
+            return ""  # explanation is non-critical — never fail the pipeline
