@@ -8,11 +8,12 @@
 const BASE_URL = "http://127.0.0.1:8000";  // ← Change if backend is hosted elsewhere
 const state = {
   session_id      : null,      // set after POST /session/init
+  mode            : "demo",    // "demo" | "custom"
   connected       : false,
   currentSQL      : null,      // last generated SQL
   currentQuestion : null,
-  explainCache    : {},        // key = session_id + sql → explanation string
-  schemaCache     : null,      // cached GET /schema response (null = not yet fetched)
+  explainCache    : {},        // key = sql → explanation string (avoids duplicate LLM calls)
+  schemaCache     : null,      // cached GET /schema response
 };
 
 // ── Element refs ──────────────────────────────────────────
@@ -74,10 +75,6 @@ const els = {
 //  API HELPERS
 // ══════════════════════════════════════════════════════════
 
-/**
- * Generic POST helper.
- * Returns parsed JSON or throws an Error with a friendly message.
- */
 async function apiPost(endpoint, body) {
   const res = await fetch(BASE_URL + endpoint, {
     method  : "POST",
@@ -95,9 +92,6 @@ async function apiPost(endpoint, body) {
   return data;
 }
 
-/**
- * Generic GET helper.
- */
 async function apiGet(endpoint) {
   const res = await fetch(BASE_URL + endpoint);
   const data = await res.json().catch(() => ({}));
@@ -154,14 +148,13 @@ async function handleConnect() {
   setLoading(els.connectBtn, true);
 
   try {
-    // Call /session/init with credentials
     const data = await apiPost("/session/init", {
       database_url,
       gemini_api_key,
     });
 
     state.session_id = data.session_id;
-    state.mode       = data.mode || "custom";  // ← Track which mode
+    state.mode       = data.mode || "custom";
     state.connected  = true;
 
     setMsg(els.connectMsg, "✓ Connected successfully", "success");
@@ -188,8 +181,8 @@ function updateConnectionBadge(connected) {
 }
 
 function enableQueryUI() {
-  els.queryBtn.disabled        = false;
-  els.resetBtn.disabled        = false;
+  els.queryBtn.disabled         = false;
+  els.resetBtn.disabled         = false;
   els.refreshSchemaBtn.disabled = false;
 }
 
@@ -201,11 +194,9 @@ async function loadSchemaInfo() {
   try {
     const data = await apiGet("/schema");
     renderSchemaInfo(data);
-
-    // Also warm the schema cache so View Tables is instant
     state.schemaCache = data;
   } catch {
-    // Non-critical — silently ignore if schema fetch fails on load
+    // Non-critical
   }
 }
 
@@ -234,15 +225,12 @@ async function handleRefreshSchema() {
       setMsg(els.schemaMsg, "✓ Schema is already up to date", "info");
     }
 
-    // Invalidate the explorer cache so it re-fetches on next open
     state.schemaCache = null;
 
-    // If explorer is currently open, re-render it with fresh data
     if (!els.schemaExplorer.classList.contains("hidden")) {
       await fetchAndRenderExplorer();
     }
 
-    // Refresh the displayed metadata
     await loadSchemaInfo();
 
   } catch (err) {
@@ -256,38 +244,25 @@ async function handleRefreshSchema() {
 //  SCHEMA EXPLORER
 // ══════════════════════════════════════════════════════════
 
-/**
- * Handles the "View Tables" button click.
- * Toggles the explorer open/closed.
- * On first open, fetches schema; subsequent opens use the cache.
- */
 async function handleViewTables() {
   const isOpen = !els.schemaExplorer.classList.contains("hidden");
 
   if (isOpen) {
-    // Already open — close it and relabel button
     closeExplorer();
     return;
   }
 
-  // Open and load
   els.schemaExplorer.classList.remove("hidden");
   updateViewTablesBtn(true);
 
   if (state.schemaCache) {
-    // Schema already loaded — render immediately, no spinner needed
     renderExplorer(state.schemaCache);
   } else {
     await fetchAndRenderExplorer();
   }
 }
 
-/**
- * Fetches /schema, caches the result, and renders the explorer.
- * Shows a subtle loading indicator while fetching.
- */
 async function fetchAndRenderExplorer() {
-  // Show a loading placeholder
   els.schemaTableList.innerHTML = `
     <li class="schema-explorer-loading">Loading tables…</li>
   `;
@@ -295,7 +270,7 @@ async function fetchAndRenderExplorer() {
   try {
     const data = await apiGet("/schema");
     state.schemaCache = data;
-    renderSchemaInfo(data);   // Also keep the stats panel fresh
+    renderSchemaInfo(data);
     renderExplorer(data);
   } catch (err) {
     els.schemaTableList.innerHTML = `
@@ -306,12 +281,6 @@ async function fetchAndRenderExplorer() {
   }
 }
 
-/**
- * Renders the list of table names into the explorer.
- * Each table row is clickable to toggle its columns.
- *
- * @param {Object} schemaData  - the /schema API response
- */
 function renderExplorer(schemaData) {
   const tables = schemaData.tables || [];
 
@@ -322,12 +291,7 @@ function renderExplorer(schemaData) {
     return;
   }
 
-  // Build a Set of FK "from" columns per table for badge lookup.
-  // The API gives us foreign_keys as strings like "book_id → books.book_id"
-  // so we parse the left-hand side.
   const fkMap = buildFkMap(tables);
-
-  // Build a Set of PK columns per table.
   const pkMap = buildPkMap(tables);
 
   els.schemaTableList.innerHTML = tables.map((table, idx) => {
@@ -369,22 +333,16 @@ function renderExplorer(schemaData) {
     `;
   }).join("");
 
-  // Attach toggle listeners
   els.schemaTableList.querySelectorAll(".schema-table-toggle").forEach(btn => {
     btn.addEventListener("click", handleTableToggle);
   });
 }
 
-/**
- * Toggles a table row open or closed.
- */
 function handleTableToggle(e) {
   const btn  = e.currentTarget;
   const item = btn.closest(".schema-table-item");
   const isOpen = item.classList.contains("is-open");
 
-  // Close all other open rows for a clean accordion-like feel
-  // (optional — comment out to allow multiple open at once)
   els.schemaTableList.querySelectorAll(".schema-table-item.is-open").forEach(openItem => {
     if (openItem !== item) {
       openItem.classList.remove("is-open");
@@ -392,22 +350,15 @@ function handleTableToggle(e) {
     }
   });
 
-  // Toggle this row
   item.classList.toggle("is-open", !isOpen);
   btn.setAttribute("aria-expanded", String(!isOpen));
 }
 
-/**
- * Closes the schema explorer and resets the button label.
- */
 function closeExplorer() {
   els.schemaExplorer.classList.add("hidden");
   updateViewTablesBtn(false);
 }
 
-/**
- * Updates the "View Tables" button label based on open/closed state.
- */
 function updateViewTablesBtn(isOpen) {
   const textEl = els.viewTablesBtn.querySelector(".btn-text");
   if (textEl) {
@@ -415,18 +366,11 @@ function updateViewTablesBtn(isOpen) {
   }
 }
 
-// ── FK / PK helpers ───────────────────────────────────────
-
-/**
- * Builds a map of table_name → Set of FK column names.
- * Parses strings like "book_id → books.book_id".
- */
 function buildFkMap(tables) {
   const map = {};
   tables.forEach(table => {
     const fkCols = new Set();
     (table.foreign_keys || []).forEach(fkStr => {
-      // fkStr format: "from_col → to_table.to_col"
       const match = fkStr.match(/^(\w+)\s*→/);
       if (match) fkCols.add(match[1]);
     });
@@ -435,9 +379,6 @@ function buildFkMap(tables) {
   return map;
 }
 
-/**
- * Builds a map of table_name → Set of PK column names.
- */
 function buildPkMap(tables) {
   const map = {};
   tables.forEach(table => {
@@ -450,7 +391,6 @@ function buildPkMap(tables) {
 //  QUERY
 // ══════════════════════════════════════════════════════════
 
-// Update query to send the mode
 async function handleQuery() {
   const question = els.questionInput.value.trim();
 
@@ -463,7 +403,7 @@ async function handleQuery() {
     const data = await apiPost("/query", {
       question,
       session_id: state.session_id,
-      mode: state.mode || "demo",  // ← Send the actual mode
+      mode      : state.mode,
     });
 
     if (data.success) {
@@ -497,7 +437,6 @@ function renderResults(data) {
 
   renderTable(data.columns || [], data.rows || [], data.truncated);
 
-  // Store data for export and reveal toolbar (only if there are results)
   if ((data.columns || []).length > 0) {
     storeExportData(data.columns, data.rows || []);
     els.exportToolbar.classList.remove("hidden");
@@ -529,7 +468,6 @@ function renderTable(columns, rows, truncated) {
     return;
   }
 
-  // Build <table>
   const thead = `<thead><tr>${columns.map(c =>
     `<th>${escapeHtml(c)}</th>`
   ).join("")}</tr></thead>`;
@@ -542,41 +480,44 @@ function renderTable(columns, rows, truncated) {
 
   els.tableContainer.innerHTML = `<table>${thead}${tbody}</table>`;
 
-  // Table footer meta
   let metaText = `${rows.length} row${rows.length !== 1 ? "s" : ""}`;
   if (truncated) metaText += ` <span class="truncated-badge">truncated</span>`;
   els.tableMeta.innerHTML = metaText;
 }
 
 // ══════════════════════════════════════════════════════════
-//  EXPLAIN
+//  EXPLAIN — on-demand only, called only when user clicks button
 // ══════════════════════════════════════════════════════════
 
 async function handleExplain() {
+  // Guard: must have a query result to explain
   if (!state.currentSQL || !state.session_id) return;
 
-  // Cache key = session_id + sql (avoids duplicate API calls)
-  const cacheKey = state.session_id + "::" + state.currentSQL;
+  // Cache key = the SQL itself (same SQL = same explanation regardless of session)
+  const cacheKey = state.currentSQL;
 
-  // Return cached explanation immediately
+  // Return cached explanation immediately — no LLM call needed
   if (state.explainCache[cacheKey]) {
     showExplanation(state.explainCache[cacheKey]);
     return;
   }
 
+  // Show loading state on button
   setLoading(els.explainBtn, true);
   els.explanationBox.classList.add("hidden");
 
   try {
+    // POST /explain — dedicated endpoint, only hit on user demand
     const data = await apiPost("/explain", {
-      question   : state.currentQuestion,
-      sql        : state.currentSQL,
-      session_id : state.session_id,
+      question  : state.currentQuestion,
+      sql       : state.currentSQL,
+      session_id: state.session_id,
+      mode      : state.mode,
     });
 
     const explanation = data.explanation || "No explanation returned.";
 
-    // Cache it
+    // Cache so repeated clicks are free (no extra LLM calls)
     state.explainCache[cacheKey] = explanation;
 
     showExplanation(explanation);
@@ -607,7 +548,6 @@ function handleReset() {
 }
 
 function resetResultsUI() {
-  // Clear explanation on every new query
   els.explanationBox.classList.add("hidden");
   els.explanationText.textContent = "";
   els.warningsContainer.classList.add("hidden");
@@ -648,9 +588,6 @@ async function handleCopySQL() {
 
   try {
     await navigator.clipboard.writeText(sql);
-    els.copySqlBtn.querySelector(".btn-text")
-      ? (els.copySqlBtn.textContent = "Copied!")
-      : null;
     els.copySqlBtn.textContent = "Copied!";
     setTimeout(() => { els.copySqlBtn.textContent = "Copy"; }, 2000);
   } catch {
@@ -662,9 +599,6 @@ async function handleCopySQL() {
 //  UTILITY HELPERS
 // ══════════════════════════════════════════════════════════
 
-/**
- * Escapes HTML special characters to prevent XSS.
- */
 function escapeHtml(str) {
   return String(str)
     .replace(/&/g, "&amp;")
@@ -673,10 +607,6 @@ function escapeHtml(str) {
     .replace(/"/g, "&quot;");
 }
 
-/**
- * Converts a Date object into a relative time string.
- * e.g. "2 minutes ago", "just now"
- */
 function formatRelativeTime(date) {
   const now  = Date.now();
   const diff = Math.floor((now - date.getTime()) / 1000);
@@ -687,9 +617,6 @@ function formatRelativeTime(date) {
   return date.toLocaleDateString();
 }
 
-/**
- * Maps raw API/fetch errors to user-friendly messages.
- */
 function friendlyError(msg = "") {
   if (msg.includes("503") || msg.toLowerCase().includes("overload"))
     return "AI service is busy right now. Please try again in a moment.";
@@ -701,10 +628,9 @@ function friendlyError(msg = "") {
 }
 
 // ══════════════════════════════════════════════════════════
-//  EXPORT — Copy Table / Download CSV / Download Excel
+//  EXPORT
 // ══════════════════════════════════════════════════════════
 
-// Internal store for the current result data
 let _exportData = { columns: [], rows: [] };
 
 function storeExportData(columns, rows) {
@@ -717,7 +643,6 @@ function flashExportMsg(text, type = "success") {
   setTimeout(() => { els.exportMsg.textContent = ""; }, 2500);
 }
 
-// 1. Copy as tab-separated table (pastes cleanly into Excel/Sheets)
 async function handleCopyTable() {
   const { columns, rows } = _exportData;
   if (!columns.length) return;
@@ -734,7 +659,6 @@ async function handleCopyTable() {
   }
 }
 
-// 2. Download as CSV
 function handleDownloadCSV() {
   const { columns, rows } = _exportData;
   if (!columns.length) return;
@@ -756,12 +680,10 @@ function handleDownloadCSV() {
   flashExportMsg("✓ CSV downloaded");
 }
 
-// 3. Download as Excel (.xlsx via CSV — opens natively in Excel)
 function handleDownloadExcel() {
   const { columns, rows } = _exportData;
   if (!columns.length) return;
 
-  // Build tab-separated values with BOM so Excel detects UTF-8
   const BOM    = "\uFEFF";
   const escape = v => (v === null ? "" : String(v).replace(/\t/g, " "));
   const lines  = [
@@ -789,55 +711,39 @@ function triggerDownload(blob, filename) {
 //  EVENT LISTENERS
 // ══════════════════════════════════════════════════════════
 
-// Connection
 els.connectBtn.addEventListener("click", handleConnect);
-
-// Allow Enter key on API key field to trigger connect
 els.apiKey.addEventListener("keydown", e => {
   if (e.key === "Enter") handleConnect();
 });
 
-// Query — click or Ctrl+Enter in textarea
 els.queryBtn.addEventListener("click", handleQuery);
 els.questionInput.addEventListener("keydown", e => {
   if ((e.ctrlKey || e.metaKey) && e.key === "Enter") handleQuery();
 });
 
-// Reset
 els.resetBtn.addEventListener("click", handleReset);
-
-// Schema refresh
 els.refreshSchemaBtn.addEventListener("click", handleRefreshSchema);
-
-// Schema Explorer — View Tables toggle
 els.viewTablesBtn.addEventListener("click", handleViewTables);
-
-// Schema Explorer — close button
 els.closeExplorerBtn.addEventListener("click", closeExplorer);
 
-// Explain (on-demand only)
+// Explain: fires only on button click — never automatically
 els.explainBtn.addEventListener("click", handleExplain);
 
-// Copy SQL
 els.copySqlBtn.addEventListener("click", handleCopySQL);
-
-// ══════════════════════════════════════════════════════════
-//  INIT — load schema info if already in demo mode
-// ══════════════════════════════════════════════════════════
-
-(async function init() {
-  // Try to load schema info immediately (works in demo mode without credentials)
-  try {
-    const data = await apiGet("/schema");
-    renderSchemaInfo(data);
-    // Warm the cache so View Tables is instant from the first click
-    state.schemaCache = data;
-  } catch {
-    // Schema not ready yet — that's fine
-  }
-})();
-
-// Export
 els.copyTableBtn.addEventListener("click", handleCopyTable);
 els.downloadCsvBtn.addEventListener("click", handleDownloadCSV);
 els.downloadExcelBtn.addEventListener("click", handleDownloadExcel);
+
+// ══════════════════════════════════════════════════════════
+//  INIT — load schema on page load (demo mode, no credentials needed)
+// ══════════════════════════════════════════════════════════
+
+(async function init() {
+  try {
+    const data = await apiGet("/schema");
+    renderSchemaInfo(data);
+    state.schemaCache = data;
+  } catch {
+    // Schema not ready yet — fine
+  }
+})();

@@ -11,6 +11,7 @@ from backend.db.connection import create_pool, close_pool, check_connection
 from backend.cache.schema_cache import get_cache_info, refresh_schema
 from backend.api.middleware import RequestLoggingMiddleware, setup_cors
 from backend.api.routes import query, schema, session
+from backend.api.routes.explain import router as explain_router   # ← NEW
 
 # ── Logging setup ─────────────────────────────────────────────
 logging.basicConfig(
@@ -41,6 +42,7 @@ def create_app() -> FastAPI:
     app.include_router(query.router)
     app.include_router(schema.router)
     app.include_router(session.router)
+    app.include_router(explain_router)   # ← NEW: POST /explain
 
     # ── Static frontend files ─────────────────────────────────
     app.mount(
@@ -54,11 +56,9 @@ def create_app() -> FastAPI:
     async def on_startup():
         logger.info(f"Starting {settings.APP_NAME} in {settings.APP_MODE} mode...")
 
-        # 1. Create DB connection pool
         await create_pool()
         logger.info("Database pool ready.")
 
-        # 2. Pre-warm schema cache so first query is fast
         try:
             await refresh_schema()
             logger.info("Schema cache pre-warmed.")

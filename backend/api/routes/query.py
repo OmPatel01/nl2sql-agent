@@ -17,7 +17,7 @@ from backend.services.session_manager import (
     add_turn,
 )
 from backend.services.session_manager import get_session_credentials
-from backend.db.connection import create_pool  # ← need this
+from backend.db.connection import create_pool
 
 logger   = logging.getLogger(__name__)
 settings = get_settings()
@@ -25,9 +25,6 @@ settings = get_settings()
 router = APIRouter(prefix="/query", tags=["Query"])
 
 # ── Shared instances for demo mode ───────────────────────────
-# Initialised once — reused across all demo requests.
-# Custom mode creates fresh instances per request using user credentials.
-
 _demo_gemini    = None
 _demo_schema    = None
 _confidence     = ConfidenceEvaluator()
@@ -48,7 +45,7 @@ def _get_demo_instances():
 
     return _demo_gemini, _demo_schema
 
-database_url = None  # will be overridden in CUSTOM mode
+
 # ── Route ─────────────────────────────────────────────────────
 
 @router.post("", response_model=QueryResponse)
@@ -62,6 +59,10 @@ async def run_query(body: QueryRequest) -> QueryResponse:
       - Any warnings about the query
       - Error message if something failed
 
+    NOTE: explanation is NOT generated here — it is generated
+    on-demand only when the user clicks "Explain" via POST /explain.
+    This avoids unnecessary LLM calls and reduces cost.
+
     Steps:
       1. Resolve services (demo vs custom)
       2. Get conversation history
@@ -71,59 +72,57 @@ async def run_query(body: QueryRequest) -> QueryResponse:
       6. Validate SQL (safety)
       7. Execute query
       8. Store turn in session history
-      9. Return response
+      9. Return response (no explanation — on-demand only)
     """
 
     question   = body.question
     session_id = body.session_id
+    database_url = None  # set below for custom mode
 
     logger.info(f"Query received | session={session_id} | question='{question}'")
 
     # ── Step 1 : Resolve services based on mode ───────────────
     if body.mode == AppMode.DEMO:
         gemini, schema_svc = _get_demo_instances()
-        executor = QueryExecutor()  # Uses settings.DATABASE_URL
-        
+        executor = QueryExecutor()
+
     elif body.mode == AppMode.CUSTOM:
-        # Fetch credentials from session store
         creds = get_session_credentials(session_id)
-        
+
         if not creds:
             raise HTTPException(
                 status_code=401,
                 detail="Session credentials not found. Call /session/init first."
             )
-        
+
         database_url, gemini_api_key = creds
-        
+
         try:
-            # Create fresh pool for this user's database
-            pool = await create_pool(database_url)
+            await create_pool(database_url)
         except Exception as e:
             logger.error(f"Failed to connect to user database: {e}")
             raise HTTPException(
                 status_code=400,
                 detail=f"Cannot connect to your database: {str(e)}"
             )
-        
-        # Create instances with user's credentials
+
         gemini     = GeminiProvider(api_key=gemini_api_key)
         schema_svc = SchemaService(database_url=database_url)
         executor   = QueryExecutor(database_url=database_url)
-    
+
     else:
         raise HTTPException(status_code=400, detail="Invalid mode")
 
     classifier = ClassifierService(gemini=gemini)
-    nl_to_sql = NLToSQLService(
-    gemini=gemini,
-    database_url=database_url if body.mode == AppMode.CUSTOM else None
-)
+    nl_to_sql  = NLToSQLService(
+        gemini=gemini,
+        database_url=database_url if body.mode == AppMode.CUSTOM else None
+    )
 
     # ── Step 2 : Get conversation history ─────────────────────
     history = get_history(session_id)
 
-    # ── Step 3a : Ambiguity check ───────────────────────────
+    # ── Step 3a : Ambiguity check ─────────────────────────────
     is_ambiguous, level = ClassifierService.is_ambiguous(question)
 
     if is_ambiguous and level == "high":
@@ -140,10 +139,9 @@ async def run_query(body: QueryRequest) -> QueryResponse:
             session_id = session_id,
         )
 
-    # ── Step 3 : Classify ─────────────────────────────────────
-    schema_text    = await schema_svc.get_prompt_text()
+    # ── Step 3b : Schema relevance (Layer 1) ──────────────────
+    schema_text = await schema_svc.get_prompt_text()
 
-    # ── Step 3b : Schema relevance (Layer 1) ────────────────
     if not ClassifierService.is_schema_relevant(question, schema_text):
         return QueryResponse(
             success    = False,
@@ -158,6 +156,7 @@ async def run_query(body: QueryRequest) -> QueryResponse:
             session_id = session_id,
         )
 
+    # ── Step 3c : LLM Classifier ──────────────────────────────
     classification = await classifier.classify(question, schema_text)
 
     if not classification.is_valid:
@@ -184,8 +183,8 @@ async def run_query(body: QueryRequest) -> QueryResponse:
         )
 
     # ── Step 5 : Confidence evaluation ────────────────────────
-    confidence    = _confidence.evaluate(sql, question)
-    warnings      = confidence.warnings   # may be empty
+    confidence = _confidence.evaluate(sql, question)
+    warnings   = confidence.warnings
 
     if is_ambiguous and level == "low":
         warnings.append(WarningDetail(
@@ -205,7 +204,6 @@ async def run_query(body: QueryRequest) -> QueryResponse:
             error         = validation.reason,
             warnings      = warnings,
             session_id    = session_id,
-            # Don't reference result here — it hasn't been fetched yet
         )
 
     # ── Step 7 : Execute ──────────────────────────────────────
@@ -222,7 +220,6 @@ async def run_query(body: QueryRequest) -> QueryResponse:
             session_id    = session_id,
         )
 
-    # Append LARGE_RESULT warning if rows were truncated
     if result["truncated"]:
         warnings.append(WarningDetail(
             code    = "LARGE_RESULT",
@@ -232,13 +229,12 @@ async def run_query(body: QueryRequest) -> QueryResponse:
             ),
         ))
 
-    # ── Step 7b : Generate explanation
-    explanation = await nl_to_sql.explain(question, validation.sanitised_sql)
-
     # ── Step 8 : Store turn ───────────────────────────────────
     add_turn(session_id, question, validation.sanitised_sql)
 
     # ── Step 9 : Return response ──────────────────────────────
+    # explanation is intentionally omitted here — generated on-demand
+    # only when user clicks the Explain button (POST /explain).
     logger.info(
         f"Query success | session={session_id} | "
         f"rows={result['row_count']} | warnings={len(warnings)}"
@@ -248,10 +244,13 @@ async def run_query(body: QueryRequest) -> QueryResponse:
         success       = True,
         question      = question,
         generated_sql = validation.sanitised_sql,
-        explanation   = explanation, 
+        explanation   = None,   # ← never generated eagerly
         columns       = result["columns"],
         rows          = result["rows"],
         row_count     = result["row_count"],
+        returned_rows = result["returned_rows"],
+        total_rows    = result["total_rows"],
+        truncated     = result["truncated"],
         warnings      = warnings,
         session_id    = session_id,
     )

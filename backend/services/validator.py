@@ -21,7 +21,7 @@ class SQLValidator:
     rejected outright and never reach the database.
 
     Rules enforced:
-      1. Only SELECT statements allowed
+      1. Only SELECT statements allowed (including CTEs that start with WITH)
       2. No stacked statements (no semicolons mid-query)
       3. No dangerous keywords regardless of position
       4. No SQL comment injections (-- or /* */)
@@ -43,11 +43,11 @@ class SQLValidator:
         "REVOKE",
         "EXECUTE",
         "EXEC",
-        "XP_",          # SQL Server proc prefix — block defensively
+        "XP_",           # SQL Server proc prefix — block defensively
         "INTO OUTFILE",  # MySQL file write — block defensively
     ]
 
-    MAX_SQL_LENGTH = 2000   # characters — a legitimate SELECT won't exceed this
+    MAX_SQL_LENGTH = 5000   # CTEs can be longer than plain SELECTs
 
 
     def validate(self, sql: str) -> ValidationResult:
@@ -72,21 +72,33 @@ class SQLValidator:
             )
 
         # ── Step 2 : Strip trailing semicolon for checks ──────
-        # We'll add it back cleanly at the end
         normalised = cleaned.rstrip(";").strip()
 
-        # ── Step 3 : Must start with SELECT ───────────────────
-        if not re.match(r"^SELECT\b", normalised, re.IGNORECASE):
+        # ── Step 3 : Must start with SELECT or WITH (CTEs) ────
+        # Valid patterns:
+        #   SELECT ...
+        #   WITH cte_name AS (SELECT ...) SELECT ...   ← CTE
+        #   WITH RECURSIVE ...                         ← recursive CTE
+        is_select = bool(re.match(r"^SELECT\b", normalised, re.IGNORECASE))
+        is_cte    = bool(re.match(r"^WITH\b",   normalised, re.IGNORECASE))
+
+        if not is_select and not is_cte:
             return self._fail(
                 f"Only SELECT queries are allowed. "
-                f"Query starts with: '{normalised[:30]}...'"
+                f"Query starts with: '{normalised[:40]}...'"
+            )
+
+        # ── Step 3b : If it's a CTE, verify it contains SELECT ─
+        # A WITH block that somehow has no SELECT is suspicious.
+        if is_cte and not re.search(r"\bSELECT\b", normalised, re.IGNORECASE):
+            return self._fail(
+                "WITH clause does not contain a SELECT statement. "
+                "Only read-only queries are permitted."
             )
 
         # ── Step 4 : Block dangerous keywords ─────────────────
         upper = normalised.upper()
         for keyword in self.BLOCKED_KEYWORDS:
-            # Use word boundary to avoid false positives
-            # e.g. "CREATED_AT" should not trigger "CREATE"
             pattern = rf"\b{re.escape(keyword)}\b"
             if re.search(pattern, upper):
                 return self._fail(
@@ -95,8 +107,6 @@ class SQLValidator:
                 )
 
         # ── Step 5 : No stacked statements ────────────────────
-        # A legitimate SELECT has at most one semicolon at the end
-        # Multiple semicolons = stacked queries = injection risk
         if normalised.count(";") > 0:
             return self._fail(
                 "Multiple statements detected (semicolon mid-query). "
