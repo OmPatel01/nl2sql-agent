@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     # ── CORS ─────────────────────────────────────────────────
     ALLOWED_ORIGINS       : list[str] = ["*"]
 
+    # ── Logging ──────────────────────────────────────────────────
+    LOG_DIR : str = "logs"
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 

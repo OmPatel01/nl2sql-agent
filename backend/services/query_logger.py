@@ -14,13 +14,15 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Optional
+from backend.config import get_settings
 
 logger = logging.getLogger(__name__)
 
 # ── Log file location ─────────────────────────────────────────
 # Relative to wherever the server process runs (project root).
 # Override via LOG_FILE env var if needed.
-LOG_DIR  = Path(os.getenv("LOG_DIR", "logs"))
+settings = get_settings()
+LOG_DIR  = Path(settings.LOG_DIR)
 LOG_FILE = LOG_DIR / "query_logs.jsonl"
 
 
@@ -84,6 +86,7 @@ class QueryLogger:
     def __init__(self, log_file: Path = LOG_FILE):
         self.log_file = log_file
         self._ensure_dir()
+        print(f"LOG FILE PATH: {self.log_file}")
 
     def _ensure_dir(self) -> None:
         try:
