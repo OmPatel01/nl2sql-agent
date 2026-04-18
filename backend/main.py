@@ -11,7 +11,8 @@ from backend.db.connection import create_pool, close_pool, check_connection
 from backend.cache.schema_cache import get_cache_info, refresh_schema
 from backend.api.middleware import RequestLoggingMiddleware, setup_cors
 from backend.api.routes import query, schema, session
-from backend.api.routes.explain import router as explain_router   # ← NEW
+from backend.api.routes.explain import router as explain_router
+from backend.api.routes.admin import router as admin_router      # ← NEW
 
 # ── Logging setup ─────────────────────────────────────────────
 logging.basicConfig(
@@ -42,7 +43,8 @@ def create_app() -> FastAPI:
     app.include_router(query.router)
     app.include_router(schema.router)
     app.include_router(session.router)
-    app.include_router(explain_router)   # ← NEW: POST /explain
+    app.include_router(explain_router)
+    app.include_router(admin_router)     # ← NEW: GET /admin/*
 
     # ── Static frontend files ─────────────────────────────────
     app.mount(
